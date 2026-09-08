@@ -12,7 +12,7 @@ after the merge.
 Git worktrees solve file isolation, but not much else. Two agents running
 `docker compose up` in two worktrees will fight over host ports and share
 named volumes, because Compose derives its project name from the directory —
-and the directories differ, but the port bindings in `compose.yml` don't.
+and the directories differ, but the port bindings in the compose file don't.
 
 This skill fixes both:
 
@@ -49,7 +49,7 @@ chmod +x .claude/skills/worktree/worktree.sh
 Optionally add to your global `CLAUDE.md`:
 
 ```markdown
-When implementing a written plan in a repo that has a `compose.yml`,
+When implementing a written plan in a repo that has a Docker Compose file,
 use the worktree skill rather than working in the current checkout.
 Skip it for single-file fixes and dependency bumps.
 ```
@@ -60,13 +60,15 @@ Ask Claude to do it:
 
 > Configure this project to work with the worktree skill.
 
-It reads `compose.yml`, proposes which services need port overrides, asks what
+It reads your compose file, proposes which services need port overrides, asks what
 a fresh checkout needs bootstrapping, writes the files, and runs a smoke test.
 
 Or by hand — two optional files at the repo root:
 
-**`compose.worktree.yml`** — layered over `compose.yml`. Republishes ports on
-kernel-assigned host ports:
+**`<base>.worktree.yml`** — layered over your compose file. Name it to match:
+`compose.worktree.yml` if you use `compose.yml`, `docker-compose.worktree.yml`
+if you use `docker-compose.yml`. Republishes ports on kernel-assigned host
+ports:
 
 ```yaml
 services:
@@ -119,6 +121,10 @@ project:  planbase-feat-session-refresh
 
 You can open that URL while it works. When it's done it opens a PR; merge with
 `gh pr merge` in the same session and it will offer to tear the worktree down.
+
+The base compose file is detected in Compose's own order: `compose.yaml`,
+`compose.yml`, `docker-compose.yaml`, `docker-compose.yml`. Either naming
+convention works.
 
 ## Layout
 
