@@ -80,6 +80,19 @@ Optionally add `.worktree-setup.sh` at the repo root if a fresh checkout needs
 bootstrapping — dependency installs, secret loading, seeding, gitignored config.
 Ask the user rather than guessing; this varies a lot between projects.
 
+If the repo's Compose files need environment injected before Docker can even
+read them (varlock, dotenvx, sops), export a command prefix from
+`.worktree-setup.sh` and every `docker compose` call is made through it:
+
+```bash
+export WORKTREE_COMPOSE_WRAPPER="varlock run --no-redact-stdout --"
+```
+
+Disable the wrapper's stdout redaction, as above. Spawn parses `docker compose
+config` as JSON, and a redacting wrapper will mask any value that collides with
+a secret — including a service *name*, which comes back as `db*****` and yields
+a garbage override file.
+
 Verify with `worktree.sh spawn feat/worktree-smoke-test`, check the printed
 ports respond, then tear it down. If the stack fails to come up, the usual
 causes are a missing healthcheck (with `--wait`) or a hardcoded host port in
