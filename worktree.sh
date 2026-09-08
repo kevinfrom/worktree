@@ -6,6 +6,22 @@ set -euo pipefail
 
 OVERRIDE_FILE="docker-compose.override.yml"
 
+# Optional command prefix for every `docker compose` invocation. Repos whose
+# compose files need env injected (varlock, dotenvx, sops...) export this from
+# .worktree-setup.sh, e.g.
+#   export WORKTREE_COMPOSE_WRAPPER="varlock run --no-redact-stdout --"
+# Left empty, compose is called directly. Split into an array with the shell's
+# own word splitting rather than expanded unquoted at each call site, so the
+# behaviour does not depend on the caller's shell (zsh does not split unquoted
+# parameters at all, which turns the whole prefix into one command name).
+COMPOSE_WRAPPER="${WORKTREE_COMPOSE_WRAPPER:-}"
+COMPOSE_PREFIX=()
+[ -n "$COMPOSE_WRAPPER" ] && read -r -a COMPOSE_PREFIX <<< "$COMPOSE_WRAPPER"
+
+# ${arr[@]+"${arr[@]}"} rather than "${arr[@]}": on bash 3.2 (still /bin/bash on
+# macOS) expanding an empty array under `set -u` is an unbound-variable error.
+compose() { ${COMPOSE_PREFIX[@]+"${COMPOSE_PREFIX[@]}"} docker compose "$@"; }
+
 # ---------------------------------------------------------------- helpers ---
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -16,15 +32,26 @@ require() {
   if [[ " $* " == *" docker "* ]]; then
     docker compose version >/dev/null 2>&1 || missing+=("docker-compose-plugin")
   fi
-  [ "${#missing[@]}" -gt 0 ] && die "missing dependencies: ${missing[*]}"
-  return 0
+  # ${#missing[@]} on an empty array trips `set -u` under bash 3.2 (macOS).
+  if [ "${#missing[@]:-0}" -gt 0 ]; then
+    die "missing dependencies: ${missing[*]}"
+  fi
 }
 
 # Sets ROOT, NAME, SLUG, DIR, PROJECT for a branch. Single source of truth for
 # how a branch name maps to a directory and a Compose project.
 resolve() {
-  local branch="$1"
-  ROOT="$(git rev-parse --show-toplevel)" || die "not inside a git repo"
+  local branch="$1" from="${2:-.}"
+  # ROOT is always the MAIN checkout, never a linked worktree: NAME derives from
+  # it and feeds the Compose project name, which has to stay identical whether
+  # resolve is called from the main checkout or from inside a worktree.
+  # --git-common-dir points every worktree at the shared .git, so its parent is
+  # the main checkout; --show-toplevel would return the worktree itself and
+  # double the slug in PROJECT.
+  local common
+  common="$(git -C "$from" rev-parse --path-format=absolute --git-common-dir)" \
+    || die "not inside a git repo"
+  ROOT="$(dirname "$common")"
   NAME="$(basename "$ROOT")"
   SLUG="$(printf '%s' "$branch" | tr '[:upper:]/' '[:lower:]-' | tr -cd '[:alnum:]-')"
   [ -n "$SLUG" ] || die "branch name '$branch' produced an empty slug"
@@ -41,9 +68,16 @@ dirty() {
 # Reads the resolved compose config and emits an override that republishes
 # every fixed host port on a kernel-assigned one. Run from inside the worktree.
 generate_override() {
-  local config
-  config="$(docker compose config --format json 2>&1)" \
-    || die "docker compose config failed:"$'\n'"$config"
+  # stderr is captured separately: compose emits warnings there (unset variables
+  # and the like) and folding them into stdout corrupts the JSON jq then parses.
+  local config errfile rc=0
+  errfile="$(mktemp)"
+  config="$(compose config --format json 2>"$errfile")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    local err; err="$(cat "$errfile")"; rm -f "$errfile"
+    die "docker compose config failed:"$'\n'"$err"
+  fi
+  rm -f "$errfile"
 
   local body
   body="$(printf '%s' "$config" | jq -r '
@@ -107,8 +141,19 @@ REPO SETUP (optional)
   Add docker-compose.override.yml to .gitignore if it isn't already. Spawn
   refuses to overwrite one that is committed to the repo.
 
+  If the repo's compose files need env injected before docker can read them,
+  export a command prefix from .worktree-setup.sh:
+
+    export WORKTREE_COMPOSE_WRAPPER="varlock run --no-redact-stdout --"
+
+  Every `docker compose` call is then made through it. Note that a secrets
+  wrapper may redact its own stdout by default, which corrupts the config JSON
+  this script parses (a service name colliding with a secret value comes back
+  as `db*****`) — pass whatever flag disables that, as above.
+
 REQUIRES
-  git, docker (compose plugin 2.24+, for the !override tag), jq.
+  git 2.31+ (for rev-parse --path-format), docker (compose plugin 2.24+, for
+  the !override tag), jq.
   gh is needed for reap and for opening PRs.
 EOF
 }
@@ -148,14 +193,16 @@ cmd_reap() {
 cmd_list() {
   require git docker jq
   local root dir branch up
-  root="$(git rev-parse --show-toplevel)"
+  # Same reason as resolve(): the main checkout is the parent of the shared
+  # .git, so this labels correctly even when run from inside a worktree.
+  root="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
   while read -r dir; do
     branch="$(git -C "$dir" symbolic-ref --short HEAD 2>/dev/null || echo '(detached)')"
     if [ "$dir" = "$root" ]; then
       echo "  $branch — $dir (main checkout)"
     else
-      resolve "$branch"
-      up="$(docker compose ls --filter "name=$PROJECT" --format json 2>/dev/null \
+      resolve "$branch" "$dir"
+      up="$(compose ls --filter "name=$PROJECT" --format json 2>/dev/null \
             | jq -r '.[0].Status // "stopped"')"
       echo "  $branch — $dir [$up]"
     fi
@@ -189,12 +236,22 @@ cmd_spawn() {
   [ -f .worktree-setup.sh ] && bash .worktree-setup.sh
 
   generate_override
-  docker compose up -d --wait
+
+  # A failed boot leaves the worktree in place on purpose: the cause is usually
+  # a fixable env/config problem, and re-running spawn would refuse because the
+  # directory now exists. Point at both ways out instead of silently dying.
+  if ! compose up -d --wait; then
+    echo >&2
+    echo "error: stack failed to start; worktree and branch were kept." >&2
+    echo "  retry:   cd $DIR && COMPOSE_PROJECT_NAME=$PROJECT ${COMPOSE_WRAPPER:+$COMPOSE_WRAPPER }docker compose up -d --wait" >&2
+    echo "  discard: worktree.sh teardown $branch" >&2
+    exit 1
+  fi
 
   echo
   echo "worktree: $DIR"
   echo "project:  $PROJECT"
-  docker compose ps --format json \
+  compose ps --format json \
     | jq -r '.Publishers[]? | select(.PublishedPort > 0)
              | "\(.TargetPort) -> http://localhost:\(.PublishedPort)"' \
     | sort -u
@@ -213,7 +270,7 @@ cmd_teardown() {
   fi
 
   cd "$DIR"
-  COMPOSE_PROJECT_NAME="$PROJECT" docker compose down -v --remove-orphans || true
+  COMPOSE_PROJECT_NAME="$PROJECT" compose down -v --remove-orphans || true
 
   cd "$ROOT"
   git worktree remove --force "$DIR"
