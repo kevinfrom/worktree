@@ -18,9 +18,16 @@ This skill fixes both:
 
 - **Volumes and networks** are namespaced by setting `COMPOSE_PROJECT_NAME`
   per worktree. Compose prefixes everything automatically.
-- **Ports** are published with no host port specified, so the kernel assigns a
-  free one. The script then asks Docker what it got and prints it. There is no
-  port registry to keep in sync and nothing to leak when a worktree is removed.
+- **Ports** are republished with no host port specified, so the kernel assigns
+  a free one. The script then asks Docker what it got and prints it. There is
+  no port registry to keep in sync and nothing to leak when a worktree is
+  removed.
+
+Spawn reads your resolved Compose config, finds every service with a fixed host
+port, and writes a `docker-compose.override.yml` into the worktree that
+republishes each one. Compose auto-loads that file, so no `-f` juggling — and
+because it only ever exists inside a worktree, your main checkout keeps its
+usual predictable ports.
 
 ## Requirements
 
@@ -54,37 +61,14 @@ use the worktree skill rather than working in the current checkout.
 Skip it for single-file fixes and dependency bumps.
 ```
 
-## Per-repo setup
+## Repo setup
 
-Ask Claude to do it:
+Nothing required. Add `docker-compose.override.yml` to `.gitignore` if it isn't
+already — spawn generates that file and refuses to run if the repo commits one.
 
-> Configure this project to work with the worktree skill.
-
-It reads your compose file, proposes which services need port overrides, asks what
-a fresh checkout needs bootstrapping, writes the files, and runs a smoke test.
-
-Or by hand — two optional files at the repo root:
-
-**`<base>.worktree.yml`** — layered over your compose file. Name it to match:
-`compose.worktree.yml` if you use `compose.yml`, `docker-compose.worktree.yml`
-if you use `docker-compose.yml`. Republishes ports on kernel-assigned host
-ports:
-
-```yaml
-services:
-  app:
-    ports: !override ["3000"]
-```
-
-The `!override` is load-bearing. Without it Compose merges `ports` additively
-and the original fixed mapping still binds, so the second worktree fails.
-
-Only list services you need to reach from the host. Services that just talk to
-each other over the Compose network need nothing.
-
-**`.worktree-setup.sh`** — run inside the fresh worktree before the stack
-starts. Dependency installs, secret loading, seeding, symlinking gitignored
-config. Skip the file if the project doesn't need any of it.
+Optionally add `.worktree-setup.sh` at the repo root, run inside the fresh
+worktree before the stack starts: dependency installs, secret loading, seeding,
+symlinking gitignored config. Skip the file if you don't need it.
 
 ## Usage
 
@@ -122,10 +106,6 @@ project:  planbase-feat-session-refresh
 You can open that URL while it works. When it's done it opens a PR; merge with
 `gh pr merge` in the same session and it will offer to tear the worktree down.
 
-The base compose file is detected in Compose's own order: `compose.yaml`,
-`compose.yml`, `docker-compose.yaml`, `docker-compose.yml`. Either naming
-convention works.
-
 ## Layout
 
 Worktrees live in `../worktrees/<repo>-<branch-slug>`, beside the repo rather
@@ -139,6 +119,8 @@ watchers.
   keep should live outside the stack.
 - `spawn` runs the stale-worktree check first, so merged branches get flagged
   the next time you start work rather than accumulating silently.
+- The generated override is rewritten on every spawn, so port changes in your
+  compose file are picked up automatically.
 - After teardown, `cd` back to the main checkout — your working directory has
   been deleted.
 

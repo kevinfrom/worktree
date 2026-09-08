@@ -61,44 +61,26 @@ refuses outright on uncommitted changes. Never run it without confirmation.
 **After teardown, `cd` back to the main checkout** — your shell's working
 directory no longer exists.
 
-## Per-repo conventions
+## Repo setup
 
-Both optional, both at repo root: a `*.worktree.yml` override for republishing
-ports (named to match your compose file — `compose.worktree.yml` or
-`docker-compose.worktree.yml`), and `.worktree-setup.sh` for project
-bootstrapping. See `worktree.sh help` for details.
+Nothing is required. Spawn reads the resolved Compose config and generates a
+`docker-compose.override.yml` inside the worktree that republishes every host
+port on a kernel-assigned one. The main checkout is untouched.
 
-## Setting up a repo for this skill
+Two things to check the first time you use it in a repo:
 
-Run this once per project, when asked to configure a repo for isolated
-worktrees. Do not spawn a worktree as part of setup.
+1. `docker compose version` is 2.24 or newer — the `!override` tag doesn't
+   exist before that, and without it Compose merges ports additively and the
+   original fixed mapping still binds.
 
-1. Check `docker compose version` is 2.24 or newer. The `!override` tag does
-   not exist before that, and without it Compose merges ports additively and
-   the original fixed mapping still binds. If it's older, stop and tell the
-   user — there is no clean workaround.
+2. `docker-compose.override.yml` is gitignored. Spawn refuses to run if it's
+   committed to the repo, since it needs to generate that file.
 
-2. Read the repo's compose file. List every service with a fixed host port mapping
-   (`"3000:3000"`), and ignore services that only expose ports internally —
-   those need no override. Show the user the list and confirm which ones they
-   actually need to reach from the host. Databases usually don't need one
-   unless they connect a GUI client.
+Optionally add `.worktree-setup.sh` at the repo root if a fresh checkout needs
+bootstrapping — dependency installs, secret loading, seeding, gitignored config.
+Ask the user rather than guessing; this varies a lot between projects.
 
-3. Write the override file — name it to match the base file (`compose.worktree.yml`
-   or `docker-compose.worktree.yml`) — with a `ports: !override ["<container-port>"]`
-   entry per confirmed service. A bare container port means "publish to a
-   kernel-assigned host port".
-
-4. Check whether the repo needs bootstrapping in a fresh checkout: gitignored
-   config files, dependency installs, secret loading, database seeding. Ask
-   the user rather than guessing — this varies a lot. If anything is needed,
-   write `.worktree-setup.sh`; if not, skip the file entirely.
-
-5. Confirm the worktrees directory is ignored if it would land inside a
-   tracked tree.
-
-6. Verify: run `worktree.sh spawn feat/worktree-smoke-test`, check the printed
-   ports respond, then `worktree.sh teardown feat/worktree-smoke-test`. Report
-   what worked. If the stack failed to come up, the usual causes are a missing
-   healthcheck (with `--wait`), a hardcoded host or port in app config, or a
-   service that needs an override you skipped in step 2.
+Verify with `worktree.sh spawn feat/worktree-smoke-test`, check the printed
+ports respond, then tear it down. If the stack fails to come up, the usual
+causes are a missing healthcheck (with `--wait`) or a hardcoded host port in
+app config.
