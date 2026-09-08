@@ -30,10 +30,22 @@ resolve() {
   PROJECT="$NAME-$SLUG"
 }
 
-# Echoes the -f flags for compose, honouring the optional override file.
+# Echoes the -f flags for compose: the base file Compose would pick itself,
+# plus the worktree override if present. Compose requires that if you pass any
+# -f, you pass them all — hence detecting the base rather than assuming.
 compose_files() {
-  printf '%s\n' -f compose.yml
-  [ -f compose.worktree.yml ] && printf '%s\n' -f compose.worktree.yml
+  local base="" override="" f
+  for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+    [ -f "$f" ] && { base="$f"; break; }
+  done
+  [ -n "$base" ] || die "no compose file found in $PWD"
+  printf '%s\n' -f "$base"
+
+  for f in compose.worktree.yaml compose.worktree.yml \
+           docker-compose.worktree.yaml docker-compose.worktree.yml; do
+    [ -f "$f" ] && { override="$f"; break; }
+  done
+  [ -n "$override" ] && printf '%s\n' -f "$override"
   return 0
 }
 
@@ -61,16 +73,22 @@ TEARDOWN
   afterwards — your working directory will no longer exist.
 
 PER-REPO CONVENTIONS (both optional, both at repo root)
-  compose.worktree.yml   layered over compose.yml; republish ports on
+  <base>.worktree.yml    layered over your compose file; republish ports on
                          kernel-assigned host ports:
                            services:
                              app:
                                ports: !override ["3000"]
                          The !override matters — without it Compose merges
                          ports additively and the fixed mapping collides.
+                         Needs Compose 2.24+. Name it to match your base file:
+                         compose.worktree.yml or docker-compose.worktree.yml.
 
   .worktree-setup.sh     run inside the fresh worktree before the stack starts;
                          dependency install, secret loading, seeding, etc.
+
+COMPOSE FILE
+  The base file is detected in Compose's own order: compose.yaml, compose.yml,
+  docker-compose.yaml, docker-compose.yml.
 
 REQUIRES
   git, docker (with compose plugin), jq. gh is needed for reap and for

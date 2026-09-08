@@ -63,9 +63,10 @@ directory no longer exists.
 
 ## Per-repo conventions
 
-Both optional, both at repo root: `compose.worktree.yml` for republishing
-ports, and `.worktree-setup.sh` for project bootstrapping. See
-`worktree.sh help` for details.
+Both optional, both at repo root: a `*.worktree.yml` override for republishing
+ports (named to match your compose file — `compose.worktree.yml` or
+`docker-compose.worktree.yml`), and `.worktree-setup.sh` for project
+bootstrapping. See `worktree.sh help` for details.
 
 ## Setting up a repo for this skill
 
@@ -77,13 +78,14 @@ worktrees. Do not spawn a worktree as part of setup.
    the original fixed mapping still binds. If it's older, stop and tell the
    user — there is no clean workaround.
 
-2. Read `compose.yml`. List every service with a fixed host port mapping
+2. Read the repo's compose file. List every service with a fixed host port mapping
    (`"3000:3000"`), and ignore services that only expose ports internally —
    those need no override. Show the user the list and confirm which ones they
    actually need to reach from the host. Databases usually don't need one
    unless they connect a GUI client.
 
-3. Write `compose.worktree.yml` with a `ports: !override ["<container-port>"]`
+3. Write the override file — name it to match the base file (`compose.worktree.yml`
+   or `docker-compose.worktree.yml`) — with a `ports: !override ["<container-port>"]`
    entry per confirmed service. A bare container port means "publish to a
    kernel-assigned host port".
 
