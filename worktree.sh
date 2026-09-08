@@ -22,6 +22,21 @@ COMPOSE_PREFIX=()
 # macOS) expanding an empty array under `set -u` is an unbound-variable error.
 compose() { ${COMPOSE_PREFIX[@]+"${COMPOSE_PREFIX[@]}"} docker compose "$@"; }
 
+# Re-derives COMPOSE_PREFIX after a .worktree-setup.sh has been sourced. The
+# array above is built once at startup from the environment, so a wrapper the
+# setup script exports would otherwise never reach compose() — the stack then
+# comes up with every interpolated value blank, reports healthy, and serves
+# 200, so nothing surfaces the failure.
+load_worktree_setup() {
+  [ -f .worktree-setup.sh ] || return 0
+  # shellcheck source=/dev/null
+  . ./.worktree-setup.sh
+  COMPOSE_WRAPPER="${WORKTREE_COMPOSE_WRAPPER:-$COMPOSE_WRAPPER}"
+  COMPOSE_PREFIX=()
+  [ -n "$COMPOSE_WRAPPER" ] && read -r -a COMPOSE_PREFIX <<< "$COMPOSE_WRAPPER"
+  return 0
+}
+
 # ---------------------------------------------------------------- helpers ---
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -32,9 +47,10 @@ require() {
   if [[ " $* " == *" docker "* ]]; then
     docker compose version >/dev/null 2>&1 || missing+=("docker-compose-plugin")
   fi
-  # ${#missing[@]} on an empty array trips `set -u` under bash 3.2 (macOS).
-  if [ "${#missing[@]:-0}" -gt 0 ]; then
-    die "missing dependencies: ${missing[*]}"
+  # `${#arr[@]}` is safe on an empty array even under `set -u` in bash 3.2
+  # (macOS). `${arr[*]}` is NOT, so the die path expands with a `:-` fallback.
+  if [ ${#missing[@]} -gt 0 ]; then
+    die "missing dependencies: ${missing[*]:-}"
   fi
 }
 
@@ -233,7 +249,10 @@ cmd_spawn() {
   fi
 
   export COMPOSE_PROJECT_NAME="$PROJECT"
-  [ -f .worktree-setup.sh ] && bash .worktree-setup.sh
+  # Sourced, not executed: a `bash x.sh` subshell would discard the wrapper the
+  # setup script exports. Must run before generate_override, which shells out to
+  # `docker compose config`.
+  load_worktree_setup
 
   generate_override
 
@@ -270,6 +289,10 @@ cmd_teardown() {
   fi
 
   cd "$DIR"
+  # Same contract as spawn: without the wrapper, `compose down` cannot read a
+  # compose file that interpolates injected env, and the `|| true` below would
+  # swallow that and silently leak containers and volumes.
+  load_worktree_setup
   COMPOSE_PROJECT_NAME="$PROJECT" compose down -v --remove-orphans || true
 
   cd "$ROOT"
