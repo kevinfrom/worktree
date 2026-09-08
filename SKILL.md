@@ -80,6 +80,12 @@ Optionally add `.worktree-setup.sh` at the repo root if a fresh checkout needs
 bootstrapping — dependency installs, secret loading, seeding, gitignored config.
 Ask the user rather than guessing; this varies a lot between projects.
 
+**Commit it.** `git worktree add` populates a new worktree from git, so an
+untracked setup script is simply absent there and spawn proceeds without it.
+With a compose wrapper that failure is silent: the stack still starts, both
+containers report healthy and the app serves 200, but every interpolated value
+inside them is blank.
+
 If the repo's Compose files need environment injected before Docker can even
 read them (varlock, dotenvx, sops), export a command prefix from
 `.worktree-setup.sh` and every `docker compose` call is made through it:

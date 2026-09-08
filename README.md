@@ -66,9 +66,14 @@ Skip it for single-file fixes and dependency bumps.
 Nothing required. Add `docker-compose.override.yml` to `.gitignore` if it isn't
 already — spawn generates that file and refuses to run if the repo commits one.
 
-Optionally add `.worktree-setup.sh` at the repo root, run inside the fresh
+Optionally add `.worktree-setup.sh` at the repo root, sourced inside the fresh
 worktree before the stack starts: dependency installs, secret loading, seeding,
 symlinking gitignored config. Skip the file if you don't need it.
+
+Commit it. `git worktree add` populates a new worktree from git, so an
+untracked setup script is absent there and spawn proceeds without it — silently,
+if it exports a compose wrapper: the stack starts, reports healthy and serves
+200 with every interpolated value blank.
 
 If the repo's Compose files need environment injected before Docker can even
 read them (varlock, dotenvx, sops), export a command prefix from
